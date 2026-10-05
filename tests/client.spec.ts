@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { Context7Client, Context7Error } from '../src/client.ts'
 
+/** Deterministic DNS so tests never depend on real resolution. */
+const publicLookup = async () => [{ address: '93.184.216.34', family: 4 as const }]
+
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 }
@@ -9,13 +13,13 @@ function jsonResponse(body: unknown, status = 200): Response {
 const testApiKey = process.env.CONTEXT7_TEST_API_KEY ?? `ctx7sk-test-${randomUUID()}`
 
 function client(fetchImpl: ReturnType<typeof vi.fn>, apiKey = testApiKey) {
-  return new Context7Client({ baseUrl: 'https://context7.test.invalid/api', apiKey, fetchImpl })
+  return new Context7Client({ lookupImpl: publicLookup, baseUrl: 'https://context7.test.invalid/api', apiKey, fetchImpl })
 }
 
 describe('Context7Client', () => {
   it('sends keyless requests without an authorization header', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ results: [] }))
-    const result = await new Context7Client({ baseUrl: 'https://context7.test.invalid/api', fetchImpl }).authTest()
+    const result = await new Context7Client({ lookupImpl: publicLookup, baseUrl: 'https://context7.test.invalid/api', fetchImpl }).authTest()
 
     expect(result).toEqual({ ok: true })
     const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit]
@@ -109,5 +113,79 @@ describe('Context7Client', () => {
     await expect(client(fetchImpl).authTest()).rejects.toThrow(Context7Error)
     await expect(client(fetchImpl).authTest()).rejects.toThrow('Rate limited')
     expect(JSON.stringify({})).not.toContain(testApiKey)
+  })
+})
+
+describe('Context7 endpoint security', () => {
+  const valid = { apiKey: 'ctx7sk_test' }
+
+  it('rejects invalid base URLs without exposing their contents', () => {
+    for (const baseUrl of [
+      'context7.com/api',
+      'ftp://context7.com/api',
+      'https://user:secretcontext7.com/api',
+      'https://context7.com/api?token=secret',
+      'https://context7.com/api#fragment',
+    ]) {
+      let error: unknown
+      try { new Context7Client({ ...valid, baseUrl }) } catch (thrown) { error = thrown }
+      expect(error).toBeInstanceOf(Context7Error)
+      expect(String(error)).not.toContain('secret')
+    }
+  })
+
+  it('rejects literal local, private, and reserved addresses before fetch', async () => {
+    for (const baseUrl of [
+      'http://localhost',
+      'http://service.localhost',
+      'http://service.local',
+      'http://127.0.0.1',
+      'http://169.254.169.254',
+      'http://0.0.0.0',
+      'http://10.0.0.1',
+      'http://192.168.1.1',
+      'http://192.0.2.1',
+      'http://198.18.0.1',
+      'http://224.0.0.1',
+      'http://192.175.48.1',
+      'http://[::1]',
+      'http://[::]',
+      'http://[fc00::1]',
+      'http://[fe80::1]',
+      'http://[fec0::1]',
+      'http://[2001:db8::1]',
+      'http://[2001:3::1]',
+      'http://[2001:4:112::1]',
+      'http://[2001:30::1]',
+      'http://[5f00::1]',
+      'http://[100:0:0:1::1]',
+      'http://[2620:4f:8000::1]',
+      'http://[64:ff9b::7f00:1]',
+      'http://[ff02::1]',
+    ]) {
+      const fetchImpl = vi.fn()
+      await expect(new Context7Client({ ...valid, baseUrl, fetchImpl }).authTest()).rejects.toBeInstanceOf(Context7Error)
+      expect(fetchImpl).not.toHaveBeenCalled()
+    }
+  })
+
+  it('fails closed on blocked, failed, empty, or inconsistent DNS results', async () => {
+    for (const lookupImpl of [
+      async () => [{ address: '192.168.1.10', family: 4 as const }],
+      async () => [{ address: '93.184.216.34', family: 4 as const }, { address: '169.254.169.254', family: 4 as const }],
+      async () => { throw new Error('dns failure') },
+      async () => [],
+      async () => [{ address: '2001:db8::1', family: 4 as const }],
+    ]) {
+      const fetchImpl = vi.fn()
+      await expect(new Context7Client({ ...valid, baseUrl: 'https://context7.example.test', fetchImpl, lookupImpl }).authTest()).rejects.toBeInstanceOf(Context7Error)
+      expect(fetchImpl).not.toHaveBeenCalled()
+    }
+  })
+
+  it('allows a public endpoint that resolves to a public address', async () => {
+    const fetchImpl = vi.fn(async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }))
+    await new Context7Client({ ...valid, baseUrl: 'https://context7.example.test', fetchImpl, lookupImpl: publicLookup }).authTest().catch(() => undefined)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 })

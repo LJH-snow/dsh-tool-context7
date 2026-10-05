@@ -1,4 +1,5 @@
 /** Context7 REST API client (v2 libs/context, v3 search) with injected fetch for testability. */
+import { assertSafeUrl, EndpointSecurityError, normalizeBaseUrl, type LookupImpl } from './url-security.js'
 
 export interface Context7ClientOptions {
   /** Context7 API root, for example https://context7.com/api. */
@@ -8,6 +9,8 @@ export interface Context7ClientOptions {
   /** HTTP request timeout in milliseconds. 0 disables the timeout. */
   timeoutMs?: number
   fetchImpl?: typeof fetch
+  /** Test-only DNS lookup override; production uses node:dns/promises. */
+  lookupImpl?: LookupImpl
 }
 
 export class Context7Error extends Error {
@@ -128,12 +131,19 @@ export class Context7Client {
   private readonly apiKey: string
   private readonly timeoutMs: number
   private readonly fetchImpl: typeof fetch
+  private readonly lookupImpl: LookupImpl | undefined
 
   constructor(options: Context7ClientOptions = {}) {
-    this.baseUrl = (options.baseUrl ?? 'https://context7.com/api').replace(/\/+$/, '')
+    try {
+      this.baseUrl = normalizeBaseUrl(options.baseUrl, 'https://context7.com/api')
+    } catch (error) {
+      if (error instanceof EndpointSecurityError) throw new Context7Error(error.message, 400)
+      throw error
+    }
     this.apiKey = options.apiKey ?? ''
     this.timeoutMs = options.timeoutMs ?? 30000
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch
+    this.lookupImpl = options.lookupImpl
   }
 
   hasCredentials(): boolean {
@@ -149,6 +159,12 @@ export class Context7Client {
     for (const [key, value] of Object.entries(params)) {
       if (value === undefined || value === '') continue
       for (const item of Array.isArray(value) ? value : [value]) url.searchParams.append(key, String(item))
+    }
+    try {
+      await assertSafeUrl(url, this.lookupImpl)
+    } catch (error) {
+      if (error instanceof EndpointSecurityError) throw new Context7Error(error.message, 400)
+      throw error
     }
     const headers: Record<string, string> = { accept: 'application/json' }
     if (this.hasCredentials()) headers.authorization = `Bearer ${this.apiKey}`

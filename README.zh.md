@@ -24,6 +24,8 @@ npm install @libai168/dsh-tool-context7
 
 API Key 是可选的：不配置时请求走 Context7 公共模式（限流较低）。配置后，插件从 `apiKeyEnv` 指定的环境变量读取密钥（格式 `ctx7sk-...`，默认变量名 `CONTEXT7_API_KEY`）。不要把可用密钥写入源码、示例、测试或提交的配置文件。密钥在 Context7 控制台创建。
 
+`baseUrl` 覆盖 必须是绝对的 `http://` 或 `https://` 根地址。只允许公网可达主机：localhost、环回、私有、链路本地、CGNAT、组播、保留/文档/基准测试网段以及全部 IANA 特殊用途地址段都会被拒绝；DNS 结果包含任一此类地址时会在发出请求前 fail closed。不允许 credentials、query、fragment 或非根路径。
+
 ## 工具
 
 | 工具 | 说明 | 写操作 |
