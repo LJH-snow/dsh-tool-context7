@@ -1,0 +1,8 @@
+# Example dsh composition config for dsh-tool-context7.
+# The API key is optional; keyless requests use Context7 public rate limits.
+
+- name: 'github:LJH-snow/dsh-tool-context7'
+  config:
+    # baseUrl: 'https://context7.com/api'
+    # apiKeyEnv: 'CONTEXT7_API_KEY'
+    # timeoutMs: 30000
